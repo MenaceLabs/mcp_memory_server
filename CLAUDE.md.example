@@ -1,4 +1,6 @@
-# Agent Name
+# Agent Instructions
+
+> This file works with any AI agent that supports instruction files — Claude (CLAUDE.md), Gemini (GEMINI.md), OpenAI (AGENTS.md), etc. Rename it to match your model. The memory system is model-agnostic.
 
 You are [Agent Name]. [Brief description of the agent's role and personality.]
 
@@ -46,14 +48,12 @@ You are responsible for proactively saving what you learn. Do not wait to be ask
 Before calling `memory_store`, classify the memory as one of two types:
 
 **DOMAIN** — Technical or process knowledge that would be useful to any agent doing similar work. Independent of who you are or who you work for.
-- *"Cloudflare Workers have a 128MB memory limit per invocation"*
-- *"Redis SETEX is more reliable than SET + EXPIRE for atomic TTL operations"*
-- Save with `scope="team"` and domain-specific tags like `cloudflare`, `redis`, `kubernetes`
+- *"Cloudflare Workers have a 128MB memory limit per invocation"* → `scope="team"`, tags: `cloudflare,limits`
+- *"Redis SETEX is more reliable than SET + EXPIRE for atomic TTL operations"* → `scope="team"`, tags: `redis,patterns`
 
 **PERSONAL** — Context specific to your agent, your team, or your supervisor. Not generically shareable.
-- *"The supervisor prefers bullet points over long paragraphs"*
-- *"Our staging environment uses a different auth flow than production"*
-- Save with `scope="agent"` and tags like `preferences`, `context`, `project`
+- *"The supervisor prefers bullet points over long paragraphs"* → `scope="agent"`, tags: `preferences`
+- *"Our staging environment uses a different auth flow than production"* → `scope="agent"`, tags: `decision`
 
 **When in doubt:** ask yourself "would this be useful to a stranger doing similar work?" If yes — domain. If no — personal.
 
@@ -63,16 +63,24 @@ This classification matters. Domain memories are eligible for contribution to Ag
 
 ### Tagging Standards
 
-Tag every memory. Tags are how knowledge gets found, filtered, and exported.
+Tag every memory. Tags are how knowledge gets found, filtered, and exported. **Use a maximum of 3 tags per memory.**
 
-| Category | Example Tags |
-|----------|-------------|
-| Domain — technical | `cloudflare`, `kubernetes`, `python`, `postgres`, `redis` |
-| Domain — process | `architecture`, `patterns`, `performance`, `security` |
-| Personal — operational | `preferences`, `project`, `decision`, `feedback`, `task` |
-| Personal — context | `context`, `relationship`, `style` |
+**Domain memories (`scope="team"`) — two-tag rule:**
+Use exactly two tags: the **technology** and the **knowledge type**.
 
-Use specific tags over generic ones. `cloudflare-workers` is more useful than `cloud`.
+| Tag type | Examples |
+|----------|----------|
+| Technology (what system) | `cloudflare`, `kubernetes`, `postgres`, `redis`, `python`, `workers`, `d1` |
+| Knowledge type (what kind) | `security`, `performance`, `limits`, `gotcha`, `patterns`, `pricing`, `config` |
+
+Good: `cloudflare,security` — Bad: `cloudflare,zones,security,patterns,context`
+
+The technology tag is how people discover the dataset. The knowledge-type tag is how they filter within it. Everything else is noise.
+
+**Personal memories (`scope="agent"`) — use only these tags:**
+`preferences`, `feedback`, `decision`, `personal`, `private`
+
+These tags are blocked from export — they will never appear in a community dataset. Do not use generic words like `context`, `project`, `task`, or `zones` as personal tags — they pollute the exportable tag list and make it harder to know what's safe to share.
 
 ---
 

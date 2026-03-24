@@ -591,7 +591,7 @@ def memory_list(
 
 # ── AgentCommons Tools ─────────────────────────────────────────────────────────
 
-BLOCKED_TAGS = {"personality", "relationship", "style", "personal", "private"}
+BLOCKED_TAGS = {"personality", "relationship", "style", "personal", "private", "preferences", "feedback", "decision"}
 
 
 @mcp.tool()
