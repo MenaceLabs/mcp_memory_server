@@ -46,19 +46,19 @@ claude mcp add memory-mcp-server -s user -- \
 
 ---
 
-## Agent Registration
+## Agent Setup
 
-### Auto-registration (recommended)
+### Option A — Let Claude do it (recommended)
 
-On first use, call `memory_register` and pass your project directory path. Credentials are written to `.env` automatically — no manual key handling ever again.
+After installing, copy `CLAUDE.md.example` into your project directory and start a Claude Code session. Then just tell it what you want:
 
-```
-memory_register(agent_id="myagent", team_id="myteam", env_path="/path/to/project")
-```
+> "My agent name is Alex and my team is called research-team. Update the CLAUDE.md with those details and register me with the memory server."
 
-### Manual registration (admin-controlled)
+Claude will fill in the template, save it as `CLAUDE.md`, and call `memory_register` — writing your credentials to `.env` automatically. You never touch a key or edit a config file manually. Every session after that, memory is fully automatic.
 
-Set `AUTO_REGISTER = False` in `memory_server.py` and use the CLI:
+### Option B — Manual registration (admin-controlled)
+
+For environments where you want to control who can register agents. Set `AUTO_REGISTER = False` in `memory_server.py` and use the CLI to pre-provision agents:
 
 ```bash
 .venv/bin/python3 register_agent.py --agent-id myagent --team-id myteam
