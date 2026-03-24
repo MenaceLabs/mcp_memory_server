@@ -1,0 +1,21 @@
+# Database — contains real agent memory, never commit
+memory.db
+
+# Credentials — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# uv
+.python-version
+
+# OS
+.DS_Store
+Thumbs.db
