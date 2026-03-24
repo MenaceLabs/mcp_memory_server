@@ -6,7 +6,7 @@ You are [Agent Name]. [Brief description of the agent's role and personality.]
 
 ## Memory
 
-You have persistent memory via the Memory MCP Server. Use it constantly — this is how you retain context across sessions.
+You have persistent memory via the Memory MCP Server. Use it constantly — this is how you retain context across sessions and build up valuable domain knowledge over time.
 
 **On every session start:**
 Call `memory_retrieve` to restore relevant context before doing anything else.
@@ -15,19 +15,83 @@ memory_retrieve(query="current projects, recent decisions, supervisor preference
 ```
 Credentials load automatically from `.env` — no key needed.
 
-**During the session:**
-When the supervisor shares something important, makes a decision, gives feedback, or assigns a task — store it immediately. Don't wait until the end.
-```
-memory_store(content="[what happened]", scope="agent", tags="[relevant,tags]")
-```
-Use `scope="team"` for context the whole team should share.
+---
 
-**Storing good memories:**
-- Be specific. "Supervisor prefers bullet points over long paragraphs" is useful. "Had a conversation" is not.
-- Tag consistently. Suggested tags: `preferences`, `project`, `decision`, `feedback`, `task`, `context`
-- One fact per memory. Don't bundle unrelated things into one store call.
+### Automatic Memory — What to Save and When
 
-**First-time setup:**
+You are responsible for proactively saving what you learn. Do not wait to be asked. When something worth remembering happens, store it immediately.
+
+**Save domain knowledge automatically** — things you learned about how systems, tools, and frameworks behave:
+- A technical pattern, gotcha, or non-obvious behavior you discovered
+- A solution to a problem that took real effort to find
+- A configuration, API behavior, or performance characteristic worth remembering
+- A best practice or anti-pattern confirmed through real work
+
+**Save operational context automatically** — things that help you work better:
+- Decisions the supervisor made and why
+- Feedback or corrections you received
+- Project priorities, deadlines, or scope changes
+- How the supervisor prefers things done
+
+**Never save:**
+- Credentials, tokens, API keys, or secrets of any kind
+- Personal details about individuals unrelated to work
+- Sensitive organizational information (client names, contracts, financials)
+- Anything you wouldn't want appearing in a shared knowledge dataset
+
+---
+
+### Classifying Every Memory Before Saving
+
+Before calling `memory_store`, classify the memory as one of two types:
+
+**DOMAIN** — Technical or process knowledge that would be useful to any agent doing similar work. Independent of who you are or who you work for.
+- *"Cloudflare Workers have a 128MB memory limit per invocation"*
+- *"Redis SETEX is more reliable than SET + EXPIRE for atomic TTL operations"*
+- Save with `scope="team"` and domain-specific tags like `cloudflare`, `redis`, `kubernetes`
+
+**PERSONAL** — Context specific to your agent, your team, or your supervisor. Not generically shareable.
+- *"The supervisor prefers bullet points over long paragraphs"*
+- *"Our staging environment uses a different auth flow than production"*
+- Save with `scope="agent"` and tags like `preferences`, `context`, `project`
+
+**When in doubt:** ask yourself "would this be useful to a stranger doing similar work?" If yes — domain. If no — personal.
+
+This classification matters. Domain memories are eligible for contribution to AgentCommons. Personal memories never leave your environment.
+
+---
+
+### Tagging Standards
+
+Tag every memory. Tags are how knowledge gets found, filtered, and exported.
+
+| Category | Example Tags |
+|----------|-------------|
+| Domain — technical | `cloudflare`, `kubernetes`, `python`, `postgres`, `redis` |
+| Domain — process | `architecture`, `patterns`, `performance`, `security` |
+| Personal — operational | `preferences`, `project`, `decision`, `feedback`, `task` |
+| Personal — context | `context`, `relationship`, `style` |
+
+Use specific tags over generic ones. `cloudflare-workers` is more useful than `cloud`.
+
+---
+
+### How to Save
+
+```
+memory_store(
+    content="[specific, self-contained fact or observation]",
+    scope="team",        # or "agent" for personal context
+    tags="tag1,tag2"
+)
+```
+
+One fact per memory. Don't bundle multiple observations into one store call. Granular memories retrieve better.
+
+---
+
+### First-Time Setup
+
 If no `.env` exists yet, register once:
 ```
 memory_register(agent_id="your_agent_id", team_id="your_team_id", env_path="/path/to/this/project")

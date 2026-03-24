@@ -32,12 +32,13 @@ import numpy as np
 from mcp.server.fastmcp import FastMCP
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-DB_PATH           = Path(__file__).parent / "memory.db"
-OLLAMA_URL        = "http://localhost:11434"
-EMBED_MODEL       = "nomic-embed-text"
-AUTO_REGISTER     = True    # False = require manual registration via register_agent.py
-CONFLICT_THRESHOLD = 0.92   # Cosine similarity above this triggers a conflict flag
-CONFLICT_TTL_DAYS = 30      # Configurable: days before superseded versions are pruned
+DB_PATH            = Path(__file__).parent / "memory.db"
+FEDERATED_CONFIG   = Path(__file__).parent / "federated.json"
+OLLAMA_URL         = "http://localhost:11434"
+EMBED_MODEL        = "nomic-embed-text"
+AUTO_REGISTER      = True    # False = require manual registration via register_agent.py
+CONFLICT_THRESHOLD = 0.92    # Cosine similarity above this triggers a conflict flag
+CONFLICT_TTL_DAYS  = 30      # Configurable: days before superseded versions are pruned
 
 # ── Server ─────────────────────────────────────────────────────────────────────
 mcp = FastMCP("memory-mcp-server")
@@ -108,6 +109,56 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     vb = np.array(b, dtype=np.float32)
     denom = np.linalg.norm(va) * np.linalg.norm(vb)
     return float(np.dot(va, vb) / denom) if denom > 0 else 0.0
+
+
+# ── Federated Sources ─────────────────────────────────────────────────────────
+def load_federated_sources() -> list[Path]:
+    """
+    Load registered federated database paths from federated.json.
+    Returns an empty list if no federated config exists.
+    """
+    if not FEDERATED_CONFIG.exists():
+        return []
+    try:
+        config = json.loads(FEDERATED_CONFIG.read_text())
+        return [Path(p) for p in config.get("sources", []) if Path(p).exists()]
+    except Exception:
+        return []
+
+
+def query_federated_source(db_path: Path, query_embedding: list[float], top_k: int) -> list[tuple[float, dict]]:
+    """
+    Query a single federated (read-only) database for semantically relevant memories.
+    Returns a list of (score, record_dict) tuples.
+    """
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM memories").fetchall()
+        conn.close()
+    except Exception:
+        return []
+
+    scored = []
+    for row in rows:
+        try:
+            emb = json.loads(row["embedding"])
+            sim = cosine_similarity(query_embedding, emb)
+            # Normalize federated row to a consistent dict format
+            scored.append((sim, {
+                "id":           row["id"],
+                "scope":        "FEDERATED",
+                "content":      row["content"],
+                "tags":         row["tags"],
+                "conflict_ids": "[]",
+                "resolved":     1,
+                "source_db":    str(db_path.name),
+            }))
+        except Exception:
+            continue
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[:top_k]
 
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -358,26 +409,50 @@ def memory_retrieve(
         ).fetchall()
     conn.close()
 
-    if not rows:
+    # Score local memories
+    scored = [
+        (cosine_similarity(query_embedding, json.loads(r["embedding"])), r)
+        for r in rows
+    ]
+
+    # Query federated sources and merge results
+    federated_sources = load_federated_sources()
+    federated_results = []
+    for source_path in federated_sources:
+        federated_results += query_federated_source(source_path, query_embedding, top_k)
+
+    # Combine local and federated, re-rank, take top_k
+    all_results = scored + [(sim, row) for sim, row in federated_results]
+    all_results.sort(key=lambda x: x[0], reverse=True)
+    top = all_results[:top_k]
+
+    if not top:
         return "No memories found."
 
-    scored = sorted(
-        [(cosine_similarity(query_embedding, json.loads(r["embedding"])), r) for r in rows],
-        key=lambda x: x[0],
-        reverse=True
-    )[:top_k]
+    source_note = f" (+ {len(federated_sources)} federated source(s))" if federated_sources else ""
+    lines = [f"Top {len(top)} memories for: \"{query}\"{source_note}\n"]
 
-    lines = [f"Top {len(scored)} memories for: \"{query}\"\n"]
-    for i, (sim, row) in enumerate(scored, 1):
-        conflict_ids = json.loads(row["conflict_ids"])
+    for i, (sim, row) in enumerate(top, 1):
+        # Handle both sqlite3.Row objects and plain dicts (federated results)
+        row_dict = dict(row) if not isinstance(row, dict) else row
+        scope = row_dict.get("scope", "UNKNOWN")
+        content = row_dict.get("content", "")
+        conflict_ids = json.loads(row_dict.get("conflict_ids", "[]"))
+        resolved = row_dict.get("resolved", 1)
+        tags = json.loads(row_dict.get("tags", "[]"))
+        memory_id = row_dict.get("id", "?")
+        source_db = row_dict.get("source_db", "")
+
         conflict_note = ""
-        if conflict_ids and not row["resolved"]:
+        if conflict_ids and not resolved:
             conflict_note = f"\n  ⚠ CONFLICT: similar memories exist — {', '.join(conflict_ids)}. Review and resolve."
-        tags = json.loads(row["tags"])
+
         tag_str = f"  tags: {', '.join(tags)}" if tags else ""
+        federated_note = f"  [from: {source_db}]" if source_db else ""
+
         lines.append(
-            f"{i}. [{row['scope'].upper()}] (id: {row['id']}, score: {sim:.3f})\n"
-            f"  {row['content']}{tag_str}{conflict_note}"
+            f"{i}. [{scope.upper()}] (id: {memory_id}, score: {sim:.3f})\n"
+            f"  {content}{tag_str}{federated_note}{conflict_note}"
         )
 
     return "\n".join(lines)
