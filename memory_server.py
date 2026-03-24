@@ -7,12 +7,14 @@ memory for AI agents. Supports per-agent and team-scoped storage with API key
 authentication.
 
 Tools:
-  memory_register  — register a new agent and receive an API key
-  memory_store     — save a memory
-  memory_retrieve  — fetch semantically relevant memories for a query
-  memory_update    — update an existing memory (creator only)
-  memory_delete    — delete a memory (creator only)
-  memory_list      — list memories filtered by scope or tags
+  memory_register   — register a new agent and receive an API key
+  memory_store      — save a memory
+  memory_retrieve   — fetch semantically relevant memories for a query
+  memory_update     — update an existing memory (creator only)
+  memory_delete     — delete a memory (creator only)
+  memory_list       — list memories filtered by scope or tags
+  memory_list_tags  — show exportable vs blocked tags with counts
+  memory_export     — export domain memories as an AgentCommons dataset
 
 Usage:
   uv run memory_server.py
@@ -585,6 +587,193 @@ def memory_list(
         )
 
     return "\n".join(lines)
+
+
+# ── AgentCommons Tools ─────────────────────────────────────────────────────────
+
+BLOCKED_TAGS = {"personality", "relationship", "style", "personal", "private"}
+
+
+@mcp.tool()
+def memory_list_tags(api_key: Optional[str] = None) -> str:
+    """
+    List all tags in the database with memory counts.
+
+    Shows which tags are exportable (domain knowledge) and which are blocked
+    (personal — never exported to AgentCommons). Useful before running
+    memory_export to decide what to include.
+
+    Args:
+        api_key: Optional. Your agent API key. If omitted, loaded automatically from .env.
+
+    Returns:
+        Tag counts split by exportable vs blocked.
+    """
+    authenticate(api_key)  # Verify caller is a registered agent
+
+    conn = get_db()
+    rows = conn.execute("SELECT tags FROM memories WHERE scope = 'team'").fetchall()
+    conn.close()
+
+    if not rows:
+        return "No team-scoped memories found. Store some memories with scope='team' first."
+
+    tag_counts: dict[str, int] = {}
+    for row in rows:
+        for tag in json.loads(row["tags"]):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+    domain_tags   = {t: c for t, c in tag_counts.items() if t not in BLOCKED_TAGS}
+    personal_tags = {t: c for t, c in tag_counts.items() if t in BLOCKED_TAGS}
+
+    lines = ["Exportable tags (domain — team-scoped memories):\n"]
+    if domain_tags:
+        for tag, count in sorted(domain_tags.items(), key=lambda x: -x[1]):
+            lines.append(f"  {tag}: {count} {'memory' if count == 1 else 'memories'}")
+    else:
+        lines.append("  (none)")
+
+    if personal_tags:
+        lines.append("\nBlocked tags (personal — never exported):")
+        for tag, count in sorted(personal_tags.items(), key=lambda x: -x[1]):
+            lines.append(f"  {tag}: {count} {'memory' if count == 1 else 'memories'}")
+
+    if domain_tags:
+        example = ",".join(list(domain_tags.keys())[:3])
+        lines.append(f"\nTo export, call: memory_export(tags=\"{example}\", out_path=\"./my-dataset\")")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def memory_export(
+    tags: str,
+    out_path: str,
+    api_key: Optional[str] = None,
+) -> str:
+    """
+    Export domain memories as an AgentCommons dataset.
+
+    Exports team-scoped memories matching the given tags to a folder containing
+    knowledge.db and metadata.json. Runs a pre-flight check for blocked tags and
+    PII patterns before writing anything.
+
+    Always confirm with your supervisor before calling this — the output is
+    intended for human review and potential community submission.
+
+    Args:
+        api_key:  Optional. Your agent API key. If omitted, loaded automatically from .env.
+        tags:     Comma-separated topic tags to export (e.g. 'cloudflare,waf,security').
+        out_path: Directory path where the dataset folder will be written.
+
+    Returns:
+        Export summary with record count and next steps, or pre-flight errors.
+    """
+    import re
+    import hashlib as _hashlib
+
+    agent_id, team_id = authenticate(api_key)
+
+    filter_tags = {t.strip() for t in tags.split(",")}
+    out = Path(out_path)
+
+    # Load team-scoped memories matching the requested tags
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, content, embedding, tags, created_at FROM memories WHERE scope = 'team'"
+    ).fetchall()
+    conn.close()
+
+    exportable = []
+    for row in rows:
+        memory_tags = set(json.loads(row["tags"]))
+        if memory_tags & BLOCKED_TAGS:
+            continue
+        if not filter_tags or (memory_tags & filter_tags):
+            exportable.append(row)
+
+    if not exportable:
+        return (
+            f"No exportable memories found matching tags: {tags}\n"
+            f"Use memory_list_tags() to see what's available."
+        )
+
+    # Pre-flight: PII scan
+    PII_PATTERNS = [
+        (r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", "email address"),
+        (r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b",                    "phone number"),
+        (r"\b\d{3}-\d{2}-\d{4}\b",                                 "SSN pattern"),
+        (r"(?i)\b(password|passwd|secret|token|api[-_]?key)\s*[=:]\s*\S+", "credential pattern"),
+        (r"\b(?:\d{1,3}\.){3}\d{1,3}\b",                          "IP address"),
+    ]
+    pii_hits = []
+    for row in exportable:
+        for pattern, label in PII_PATTERNS:
+            if re.search(pattern, row["content"]):
+                pii_hits.append((row["id"], label))
+
+    if pii_hits:
+        hit_lines = "\n".join(f"  memory {mid}: possible {label}" for mid, label in pii_hits)
+        return (
+            f"Export blocked — PII detected in {len(pii_hits)} record(s):\n{hit_lines}\n\n"
+            f"Review these memories and update or delete them before exporting."
+        )
+
+    # Write export
+    out.mkdir(parents=True, exist_ok=True)
+    db_out = out / "knowledge.db"
+    if db_out.exists():
+        db_out.unlink()
+
+    export_conn = sqlite3.connect(db_out)
+    export_conn.executescript("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id        TEXT PRIMARY KEY,
+            content   TEXT NOT NULL,
+            embedding TEXT NOT NULL,
+            tags      TEXT NOT NULL DEFAULT '[]',
+            source_at TEXT NOT NULL
+        );
+    """)
+    for row in exportable:
+        export_conn.execute(
+            "INSERT OR IGNORE INTO memories (id, content, embedding, tags, source_at) VALUES (?, ?, ?, ?, ?)",
+            (row["id"], row["content"], row["embedding"], row["tags"], row["created_at"])
+        )
+    export_conn.commit()
+    export_conn.close()
+
+    # Write metadata
+    from datetime import date
+    name = "-".join(sorted(filter_tags))
+    metadata = {
+        "name": name,
+        "version": "1.0.0",
+        "embedding_model": EMBED_MODEL,
+        "topic_tags": list(filter_tags),
+        "agent_type": "engineering",
+        "record_count": len(exportable),
+        "language": "en",
+        "submitted_by": "your-github-username",
+        "submitted_at": date.today().isoformat(),
+        "provenance": [],
+        "description": f"Domain knowledge dataset covering: {', '.join(filter_tags)}. Generated by an AI agent via MCP Memory Server.",
+    }
+    (out / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    (out / "README.md").write_text(f"# {name}\n\nFill in dataset description.\n")
+
+    return (
+        f"Export complete — {len(exportable)} records written to {out}/\n\n"
+        f"Pre-flight checks passed:\n"
+        f"  ✓ No blocked tags\n"
+        f"  ✓ No PII patterns detected\n\n"
+        f"Next steps (requires human review before submitting):\n"
+        f"  1. Review {out}/knowledge.db for any sensitive content\n"
+        f"  2. Fill in {out}/metadata.json — set submitted_by and provenance\n"
+        f"  3. Fill in {out}/README.md\n"
+        f"  4. Run: python validate.py --dataset {out}\n"
+        f"  5. Submit via Pull Request to community/<topic>/{name}/"
+    )
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
