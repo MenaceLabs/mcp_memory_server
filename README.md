@@ -38,10 +38,12 @@ uv pip install "mcp[cli]>=1.0.0" "numpy>=1.26.0"
 
 **Register with Claude Code (global — available in all sessions):**
 
+Run this from inside the `mcp_memory_server` directory:
+
 ```bash
 claude mcp add memory-mcp-server -s user -- \
-  /path/to/mcp_memory_server/.venv/bin/python3 \
-  /path/to/mcp_memory_server/memory_server.py
+  "$(pwd)/.venv/bin/python3" \
+  "$(pwd)/memory_server.py"
 ```
 
 ---
@@ -76,6 +78,8 @@ For environments where you want to control who can register agents. Set `AUTO_RE
 | `memory_update` | Update a memory you created |
 | `memory_delete` | Delete a memory you created |
 | `memory_list` | List memories filtered by scope or tags |
+| `memory_list_tags` | Show exportable vs blocked tags with memory counts |
+| `memory_export` | Export domain memories as an AgentCommons dataset |
 
 All tools except `memory_register` will load credentials automatically from `.env` or the `MEMORY_API_KEY` environment variable if `api_key` is not explicitly passed.
 
